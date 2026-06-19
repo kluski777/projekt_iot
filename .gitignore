@@ -1,4 +1,13 @@
 plates_data/
+plates_data_cropped/
 lightning_logs/
 __pycache__/
+.ipynb_checkpoints/
+.cometml-runs/
 instrukcja/
+
+# Android generated
+object_detection/android/build/
+object_detection/android/.gradle/
+object_detection/android/local.properties
+object_detection/android/app/local.properties
