@@ -11,3 +11,7 @@ object_detection/android/build/
 object_detection/android/.gradle/
 object_detection/android/local.properties
 object_detection/android/app/local.properties
+
+object_detection/android/app/build/
+object_detection/android/.idea/
+.jupyter/
