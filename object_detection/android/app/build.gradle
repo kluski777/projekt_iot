@@ -18,17 +18,20 @@ apply plugin: 'com.android.application'
 apply plugin: 'kotlin-android'
 apply plugin: 'kotlin-kapt'
 apply plugin: "androidx.navigation.safeargs"
-apply plugin: 'de.undercouch.download'
+//apply plugin: 'de.undercouch.download'
 
 android {
-    compileSdkVersion 32
+    compileSdkVersion 34
     defaultConfig {
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
         applicationId "org.tensorflow.lite.examples.objectdetection"
-        minSdkVersion 21
-        targetSdkVersion 32
+        minSdkVersion 23
+        targetSdkVersion 34
         versionCode 1
         versionName "1.0.0"
+        ndk {
+            abiFilters 'arm64-v8a'
+        }
     }
 
     dataBinding {
@@ -55,7 +58,7 @@ android {
         viewBinding true
     }
     androidResources {
-        noCompress 'tflite', 'onnx'
+        noCompress 'tflite', 'onnx', 'pte'
     }
 
 }
@@ -66,7 +69,7 @@ project.ext.TEST_ASSETS_DIR = projectDir.toString() + '/src/androidTest/assets'
 
 // Download default models; if you wish to use your own models then
 // place them in the "assets" directory and comment out this line.
-apply from:'download_models.gradle'
+//apply from:'download_models.gradle'
 
 dependencies {
     // Kotlin lang
@@ -119,6 +122,6 @@ dependencies {
     androidTestImplementation "androidx.test:runner:1.4.0"
     androidTestImplementation "androidx.test.espresso:espresso-core:3.4.0"
 
-    // ONNX Runtime for model.onnx inference
-    implementation 'com.microsoft.onnxruntime:onnxruntime-android:1.16.3'
+    // ExecuTorch Runtime Android
+    implementation 'org.pytorch:executorch-android:1.3.1'
 }

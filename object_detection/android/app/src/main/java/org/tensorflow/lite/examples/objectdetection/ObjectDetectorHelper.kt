@@ -1,23 +1,27 @@
 package org.tensorflow.lite.examples.objectdetection
 
-import ai.onnxruntime.OnnxTensor
-import ai.onnxruntime.OrtEnvironment
-import ai.onnxruntime.OrtSession
 import android.content.Context
 import android.graphics.Bitmap
+import android.graphics.Matrix
 import android.graphics.RectF
 import android.os.SystemClock
 import android.util.Log
+import org.pytorch.executorch.EValue
+import org.pytorch.executorch.Module
+import org.pytorch.executorch.Tensor
+import java.io.File
+import java.io.FileOutputStream
+import java.nio.ByteBuffer
+import java.nio.ByteOrder
 import java.nio.FloatBuffer
 
 /**
- * Runs model.onnx via ONNX Runtime.
+ * Runs plate_recognizer.pte (YOLO + OCR Combined) via ExecuTorch 1.3.1.
  *
- * Expected model contract:
- *   Input  "images"  : [1, 3, 640, 640]  float32, raw pixel values [0, 255], NCHW
- *   Output "output0" : best plate box [1, 4] — x1 y1 x2 y2 in 640×640 pixel space
- *   Output "output1" : plate characters [1, 8, vocab_size]
- *       Alphabet: "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ " (space = pad / unknown)
+ * Input  "images"  : [1, 3, 640, 640]  float32, [0-255] raw pixels, NCHW
+ * Output 0 (tuple) : best plate box [1, 4] — x1 y1 x2 y2 in 640×640 pixel space
+ * Output 1 (tuple) : plate characters [1, 8, 37]
+ * Alphabet: "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ " (space = pad / unknown)
  */
 class ObjectDetectorHelper(
     var threshold: Float = 0.25f,
@@ -27,9 +31,9 @@ class ObjectDetectorHelper(
     val context: Context,
     val objectDetectorListener: DetectorListener?
 ) {
-    private val ortEnv: OrtEnvironment = OrtEnvironment.getEnvironment()
-    private var ortSession: OrtSession? = null
+    private var executorchModule: Module? = null
 
+    // Rozmiar wejściowy dopasowany pod natywne 640x640 modelu YOLO v26n
     private val inputSize = 640
     private val plateAlphabet = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ "
 
@@ -38,108 +42,145 @@ class ObjectDetectorHelper(
     }
 
     fun clearObjectDetector() {
-        ortSession?.close()
-        ortSession = null
+        executorchModule = null
     }
 
     fun setupObjectDetector() {
         try {
-            val opts = OrtSession.SessionOptions().apply {
-                setIntraOpNumThreads(numThreads)
-            }
-            val bytes = context.assets.open("model.onnx").readBytes()
-            ortSession = ortEnv.createSession(bytes, opts)
-            Log.d(TAG, "ONNX session ready. inputs=${ortSession?.inputNames} outputs=${ortSession?.outputNames}")
+            val modelPath = getAssetFilePath(context, "model.pte")
+            executorchModule = Module.load(modelPath)
+            Log.d(TAG, "ExecuTorch Combined module ready from path: $modelPath")
         } catch (e: Exception) {
-            objectDetectorListener?.onError("Failed to load model.onnx: ${e.message}")
-            Log.e(TAG, "Session creation failed", e)
+            objectDetectorListener?.onError("Failed to load model.pte: ${e.message}")
+            Log.e(TAG, "Module creation failed", e)
         }
     }
 
+    private fun letterboxBitmap(src: Bitmap, size: Int): Bitmap {
+        val scale = size.toFloat() / maxOf(src.width, src.height)
+        val newW = (src.width * scale).toInt()
+        val newH = (src.height * scale).toInt()
+        val resized = Bitmap.createScaledBitmap(src, newW, newH, true)
+
+        val padded = Bitmap.createBitmap(size, size, Bitmap.Config.ARGB_8888)
+        val canvas = android.graphics.Canvas(padded)
+        canvas.drawColor(android.graphics.Color.BLACK)  // czarne paski
+        canvas.drawBitmap(resized,
+            ((size - newW) / 2).toFloat(),
+            ((size - newH) / 2).toFloat(),
+            null)
+        return padded
+    }
+
     fun detect(image: Bitmap, imageRotation: Int) {
-        val session = ortSession ?: return
+        val module = executorchModule ?: return
 
         val start = SystemClock.uptimeMillis()
 
-        val scaled = Bitmap.createScaledBitmap(image, inputSize, inputSize, true)
+        // 1. Prostowanie obrazu w zależności od fizycznej orientacji telefonu
+        val rotatedBitmap = if (imageRotation != 0) {
+            val matrix = Matrix().apply { postRotate(imageRotation.toFloat()) }
+            Bitmap.createBitmap(image, 0, 0, image.width, image.height, matrix, true)
+        } else {
+            image
+        }
+
+        // 2. Skalowanie wyprostowanego obrazu do rozdzielczości 640x640
+        val scaled = letterboxBitmap(rotatedBitmap, inputSize)
         val inputBuf = bitmapToNchw(scaled)
 
-        val inputTensor = OnnxTensor.createTensor(
-            ortEnv, inputBuf,
-            longArrayOf(1, 3, inputSize.toLong(), inputSize.toLong())
-        )
+        val inputShape = longArrayOf(1, 3, inputSize.toLong(), inputSize.toLong())
+        val inputTensor = Tensor.fromBlob(inputBuf, inputShape)
 
-        val outputs = try {
-            session.run(mapOf(session.inputNames.first() to inputTensor))
+        // 3. Wywołanie inferencji na silniku ExecuTorch
+        val outputs: Array<EValue> = try {
+            module.forward(EValue.from(inputTensor))
         } catch (e: Exception) {
             objectDetectorListener?.onError("Inference error: ${e.message}")
             Log.e(TAG, "Inference failed", e)
-            inputTensor.close()
             return
-        } finally {
-            inputTensor.close()
         }
 
         val inferenceTime = SystemClock.uptimeMillis() - start
         Log.d(TAG, "Inference done in ${inferenceTime}ms")
+
         val detections = parseOutputs(outputs, image.width, image.height)
-        outputs.close()
 
         objectDetectorListener?.onResults(detections, inferenceTime, image.height, image.width)
     }
 
+    // Alokacja pamięci natywnej (Direct Buffer) i wysyłanie surowych wartości [0.0 - 255.0]
     private fun bitmapToNchw(bitmap: Bitmap): FloatBuffer {
         val n = inputSize * inputSize
         val pixels = IntArray(n)
         bitmap.getPixels(pixels, 0, inputSize, 0, 0, inputSize, inputSize)
 
-        val buf = FloatBuffer.allocate(3 * n)
+        val byteBuffer = ByteBuffer.allocateDirect(3 * n * 4)
+        byteBuffer.order(ByteOrder.nativeOrder())
+        val buf = byteBuffer.asFloatBuffer()
+
         for (i in 0 until n) {
             val px = pixels[i]
-            buf.put(i,       ((px shr 16) and 0xFF).toFloat())
-            buf.put(i + n,   ((px shr 8)  and 0xFF).toFloat())
-            buf.put(i + n*2, ( px         and 0xFF).toFloat())
+            buf.put(i,       (((px shr 16) and 0xFF).toFloat())) // R
+            buf.put(i + n,   (((px shr 8)  and 0xFF).toFloat())) // G
+            buf.put(i + n*2, (( px         and 0xFF).toFloat())) // B
         }
-        return buf  // position stays 0 due to absolute puts
+
+        buf.rewind()
+        return buf
     }
 
-    private fun parseOutputs(outputs: OrtSession.Result, origW: Int, origH: Int): List<PlateDetection> {
-        val names = outputs.map { it.key }.toList()
-        if (names.isEmpty()) return emptyList()
+    private fun parseOutputs(outputs: Array<EValue>?, origW: Int, origH: Int): List<PlateDetection> {
+        try {
+            if (outputs == null || outputs.isEmpty()) return emptyList()
 
-        val boxTensor  = outputs[names[0]].get() as? OnnxTensor ?: return emptyList()
-        val charTensor = if (names.size > 1) outputs[names[1]].get() as? OnnxTensor else null
+            val boxTensor = outputs[0].toTensor()
+            val data = boxTensor.dataAsFloatArray
+            if (data.size < 4) return emptyList()
 
-        val plateText = charTensor?.let { decodePlateChars(it) } ?: ""
+            val rawX1 = data[0]
+            val rawY1 = data[1]
+            val rawX2 = data[2]
+            val rawY2 = data[3]
 
-        // output0: [1, 4] — x1 y1 x2 y2 in 640×640 pixel space
-        val data = boxTensor.floatBuffer
-        Log.d(TAG, "output0 raw box: x1=${data[0]} y1=${data[1]} x2=${data[2]} y2=${data[3]}")
-        Log.d(TAG, "output1 plate text: \"$plateText\"")
+            if (rawX1 < -10f || rawY1 < -10f) return emptyList()
 
-        val sx = origW.toFloat() / inputSize
-        val sy = origH.toFloat() / inputSize
+            // Odskalowanie letterbox 640×640 → oryginalne wymiary
+            val scale = inputSize.toFloat() / maxOf(origW, origH)
+            val padX = (inputSize - origW * scale) / 2f
+            val padY = (inputSize - origH * scale) / 2f
 
-        return listOf(PlateDetection(
-            boundingBox = RectF(
-                (data[0] * sx).coerceIn(0f, origW.toFloat()),
-                (data[1] * sy).coerceIn(0f, origH.toFloat()),
-                (data[2] * sx).coerceIn(0f, origW.toFloat()),
-                (data[3] * sy).coerceIn(0f, origH.toFloat()),
-            ),
-            confidence = 1.0f,
-            classLabel = "plate",
-            plateText  = plateText,
-        ))
+            val x1 = ((rawX1 - padX) / scale).coerceIn(0f, origW.toFloat())
+            val y1 = ((rawY1 - padY) / scale).coerceIn(0f, origH.toFloat())
+            val x2 = ((rawX2 - padX) / scale).coerceIn(0f, origW.toFloat())
+            val y2 = ((rawY2 - padY) / scale).coerceIn(0f, origH.toFloat())
+
+            val charTensor = if (outputs.size > 1) outputs[1].toTensor() else null
+            val plateText = charTensor?.let { decodePlateChars(it) } ?: ""
+            val cleanText = plateText.trim().replace(" ", "")
+
+            if (cleanText.length < 3) return emptyList()
+
+            Log.d(TAG, "Plate detected! Box: [$x1, $y1, $x2, $y2] Text: $cleanText")
+
+            return listOf(PlateDetection(
+                boundingBox = RectF(x1, y1, x2, y2),
+                confidence = 1.0f,
+                classLabel = "plate",
+                plateText = cleanText
+            ))
+        } catch (e: Exception) {
+            Log.e(TAG, "Error during parseOutputs", e)
+            return emptyList()
+        }
     }
 
-    // Plate character tensor: [1, 8, vocab_size]
-    private fun decodePlateChars(tensor: OnnxTensor): String {
-        val shape = tensor.info.shape
+    private fun decodePlateChars(tensor: Tensor): String {
+        val shape = tensor.shape()
         if (shape.size < 3) return ""
         val numPos  = shape[1].toInt()
         val vocabSz = shape[2].toInt()
-        val data    = tensor.floatBuffer
+        val data    = tensor.dataAsFloatArray
 
         return buildString {
             for (pos in 0 until numPos) {
@@ -147,11 +188,32 @@ class ObjectDetectorHelper(
                 var bestVal = Float.NEGATIVE_INFINITY
                 for (v in 0 until vocabSz) {
                     val score = data[pos * vocabSz + v]
-                    if (score > bestVal) { bestVal = score; bestIdx = v }
+                    if (score > bestVal) {
+                        bestVal = score
+                        bestIdx = v
+                    }
                 }
                 append(if (bestIdx < plateAlphabet.length) plateAlphabet[bestIdx] else ' ')
             }
         }.trimEnd()
+    }
+
+    private fun getAssetFilePath(context: Context, assetName: String): String {
+        val file = File(context.cacheDir, assetName)
+        if (file.exists() && file.length() > 0) {
+            return file.absolutePath
+        }
+        context.assets.open(assetName).use { inputStream ->
+            FileOutputStream(file).use { outputStream ->
+                val buffer = ByteArray(4 * 1024)
+                var read: Int
+                while (inputStream.read(buffer).also { read = it } != -1) {
+                    outputStream.write(buffer, 0, read)
+                }
+                outputStream.flush()
+            }
+        }
+        return file.absolutePath
     }
 
     interface DetectorListener {

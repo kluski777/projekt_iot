@@ -130,7 +130,6 @@ class CameraFragment : Fragment(), ObjectDetectorHelper.DetectorListener {
         binding.bottomSheetLayout.maxResultsValue.text = detectorHelper.maxResults.toString()
         binding.bottomSheetLayout.thresholdValue.text  = "%.2f".format(detectorHelper.threshold)
         binding.bottomSheetLayout.threadsValue.text    = detectorHelper.numThreads.toString()
-        detectorHelper.clearObjectDetector()
         binding.overlay.clear()
     }
 
