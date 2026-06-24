@@ -1,0 +1,7 @@
+/home/oobx/Desktop/PROJEKTY/SIiUM/IoT/Projekt/ExecuT/projekt_iot-main/object_detection/android/app/src/main/java/org/tensorflow/lite/examples/objectdetection/MainActivity.kt
+/home/oobx/Desktop/PROJEKTY/SIiUM/IoT/Projekt/ExecuT/projekt_iot-main/object_detection/android/app/src/main/java/org/tensorflow/lite/examples/objectdetection/PlateDetection.kt
+/home/oobx/Desktop/PROJEKTY/SIiUM/IoT/Projekt/ExecuT/projekt_iot-main/object_detection/android/app/src/main/java/org/tensorflow/lite/examples/objectdetection/ObjectDetectorHelper.kt
+/home/oobx/Desktop/PROJEKTY/SIiUM/IoT/Projekt/ExecuT/projekt_iot-main/object_detection/android/app/src/main/java/org/tensorflow/lite/examples/objectdetection/fragments/CameraFragment.kt
+/home/oobx/Desktop/PROJEKTY/SIiUM/IoT/Projekt/ExecuT/projekt_iot-main/object_detection/android/app/src/main/java/org/tensorflow/lite/examples/objectdetection/fragments/PermissionsFragment.kt
+/home/oobx/Desktop/PROJEKTY/SIiUM/IoT/Projekt/ExecuT/projekt_iot-main/object_detection/android/app/src/main/java/org/tensorflow/lite/examples/objectdetection/ViewCropped.kt
+/home/oobx/Desktop/PROJEKTY/SIiUM/IoT/Projekt/ExecuT/projekt_iot-main/object_detection/android/app/src/main/java/org/tensorflow/lite/examples/objectdetection/OverlayView.kt
