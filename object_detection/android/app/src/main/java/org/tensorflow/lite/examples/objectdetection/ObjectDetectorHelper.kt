@@ -34,8 +34,8 @@ class ObjectDetectorHelper(
     private var executorchModule: Module? = null
 
     // Rozmiar wejściowy dopasowany pod natywne 640x640 modelu YOLO v26n
-    private val inputSize = 640
-    private val plateAlphabet = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ "
+    private val inputSize = 960
+    private val plateAlphabet = "ABCDEFGHIJKLMNOPRSTUVWXYZ0123456789"
 
     init {
         setupObjectDetector()
@@ -136,16 +136,18 @@ class ObjectDetectorHelper(
 
             val boxTensor = outputs[0].toTensor()
             val data = boxTensor.dataAsFloatArray
-            if (data.size < 4) return emptyList()
+            if (data.size < 5) return emptyList()
 
             val rawX1 = data[0]
             val rawY1 = data[1]
             val rawX2 = data[2]
             val rawY2 = data[3]
+            val conf = data[4]
 
-            if (rawX1 < -10f || rawY1 < -10f) return emptyList()
+            // Filtr confidence
+            if (conf < threshold) return emptyList()
 
-            // Odskalowanie letterbox 640×640 → oryginalne wymiary
+            // Odskalowanie letterbox 960×960 → oryginalne wymiary
             val scale = inputSize.toFloat() / maxOf(origW, origH)
             val padX = (inputSize - origW * scale) / 2f
             val padY = (inputSize - origH * scale) / 2f
@@ -161,11 +163,11 @@ class ObjectDetectorHelper(
 
             if (cleanText.length < 3) return emptyList()
 
-            Log.d(TAG, "Plate detected! Box: [$x1, $y1, $x2, $y2] Text: $cleanText")
+            Log.d(TAG, "Plate detected! Box: [$x1, $y1, $x2, $y2] Conf: $conf Text: $cleanText")
 
             return listOf(PlateDetection(
                 boundingBox = RectF(x1, y1, x2, y2),
-                confidence = 1.0f,
+                confidence = conf,
                 classLabel = "plate",
                 plateText = cleanText
             ))
@@ -200,6 +202,7 @@ class ObjectDetectorHelper(
 
     private fun getAssetFilePath(context: Context, assetName: String): String {
         val file = File(context.cacheDir, assetName)
+        file.delete()
         if (file.exists() && file.length() > 0) {
             return file.absolutePath
         }
